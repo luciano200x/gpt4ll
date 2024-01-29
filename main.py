@@ -189,27 +189,23 @@ def message_func(message: dict, is_user=False, is_df=False, is_system=False):
             return
 
 
-async def get_subject_message(content: str) -> str:
+async def get_subject_message(content: str) -> None:
     '''
     initialize the subject in session_state and fill it with contextual info. 
     Param: content (str): contextual text to summarize
-    '''
-    if "subject" not in st.session_state:
-        SUBJECT_QUERY[1]["content"] += content
-        with st.sidebar:
-            with st.spinner("Getting subject"):
-                subject = await get_streaming_response(messages=SUBJECT_QUERY,_async=True)
-        st.session_state["subject"] = subject
-        with conn.session as s:
-            sql = """
-                INSERT INTO subject(chatID,subject)
-                VALUES(:chatID, :subject);
-                """
-            s.execute(sql, {'chatID': st.session_state["chatID"], 'subject': subject})
-            s.commit()
-    else:
-        subject = st.session_state["subject"]
-    return subject
+    '''   
+    SUBJECT_QUERY[1]["content"] += content
+    with st.sidebar:
+        with st.spinner("Getting subject"):
+            subject = await get_streaming_response(messages=SUBJECT_QUERY,_async=True)
+    st.session_state["subject"] = subject
+    with conn.session as s:
+        sql = """
+            INSERT INTO subject(chatID,subject)
+            VALUES(:chatID, :subject);
+            """
+        s.execute(sql, {'chatID': st.session_state["chatID"], 'subject': subject})
+        s.commit()
 
 
 def display_subject(text: str) -> str:
