@@ -202,7 +202,7 @@ async def get_subject_message(content: str) -> None:
     with conn.session as s:
         sql = """
             INSERT INTO subject(chatID,subject)
-            VALUES(:chatID, :subject);
+            SELECT :chatID, :subject WHERE NOT EXISTS (SELECT * FROM subject WHERE chatID = :chatID);
             """
         s.execute(sql, {'chatID': st.session_state["chatID"], 'subject': subject})
         s.commit()
