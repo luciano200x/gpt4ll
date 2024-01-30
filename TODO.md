@@ -1,7 +1,10 @@
 # '''TODO: 
+* multimodal verwerking
+* integratie Vanna
+* lokaal code draaien (zoals code interpreter)
 # * clear chat history knop toevoegen --> LATER
 # * user specific chat history --> LATER 
-# * unit tests schrijven
+# * unit tests schrijven --> DONE
 # * doorzoeken chat history toevoegen --> DONE
 # * custom instruction ook opslaan in chat history --> DONE
 # * streaming text --> DONE!
