@@ -2,6 +2,8 @@ import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, 
 from datetime import datetime
 from yaml.loader import SafeLoader
 from openai import AsyncOpenAI
+from search_web import get_page_text, get_driver
+from urlextract import URLExtract
 
 dotenv.load_dotenv()
 
@@ -19,6 +21,7 @@ SUBJECT_QUERY = [
     {"role": "system", "content": "always respond by summarizing the user query using exactly four words only"},
     {"role": "user", "content": "summarize the following query in four words so it can be used as a subject header. Do not use more than four words: "},
 ]
+SUMMARY_PROMPT = 'Write a summary of the following text: '
 
 
 with open("ui/styles.md", "r") as styles_file:
@@ -32,7 +35,18 @@ with open('creds.yaml') as file:
 #Get user input
 def get_user_input() -> bool:
     '''get user input'''
-    if prompt := st.chat_input(placeholder="query here"):
+    if prompt := st.chat_input(placeholder="query here"):        
+        extractor = URLExtract()
+        urls = extractor.find_urls(prompt)
+        if urls:
+            for url in urls:
+                with get_driver() as driver:
+                    text = get_page_text(url, driver)
+                    if len(text) > 20000:
+                        st.write('Web text is longer than 20000 characters. Please cut into smaller pieces.')
+                        st.stop()
+                    else:
+                        prompt = SUMMARY_PROMPT + text.strip().replace('\n','')
         append_message(prompt, role='user')
         st.session_state["chat_react"] = True
         return True
@@ -139,9 +153,9 @@ def message_func(message: dict, is_user=False, is_df=False, is_system=False):
     messageno = conn.query(sql, params={"chatID":chatID},ttl=0.5)
     col1, col2 = st.columns([0.1,3])
     if is_user:
-        avatar_url = "https://avataaars.io/?accessoriesType=Round&avatarStyle=Transparent&clotheColor=PastelYellow&clotheType=Hoodie&eyeType=Hearts&eyebrowType=SadConcernedNatural&facialHairColor=Black&facialHairType=Blank&graphicType=SkullOutline&hairColor=BrownDark&hatColor=PastelOrange&mouthType=Grimace&skinColor=Pale&topType=WinterHat4"
+        avatar_url = "https://media4.giphy.com/media/Os0MAI2izDLNK/giphy.gif?cid=ecf05e476b84jmbjook8jv2k9l8igegu4ndxrikmjl635rgo&ep=v1_gifs_related&rid=giphy.gif"
         message_alignment = "flex-end"
-        message_bg_color = "#0a0a0a"
+        message_bg_color = "#0e1117"
         avatar_class = "user-avatar"
         with col1:
             #edit button should not be used on the first message
@@ -165,13 +179,13 @@ def message_func(message: dict, is_user=False, is_df=False, is_system=False):
             f"""
                 <img src="{avatar_url}" class="{avatar_class}" alt="avatar" style="width: 50px; height: 50px;" />
                 <div style="display: flex; align-items: center; margin-bottom: 10px; justify-content: {message_alignment};">
-                    <div style="background: {message_bg_color}; color: white; border-radius: 20px; padding: 10px; margin-right: 5px; max-width: 75%;;">
-                        {format_message(text)} \n </div></div>
+                    <div style="background: {message_bg_color}; color: white; border-radius: 20px; padding: 10px; margin-right: 5px; max-width: 75%;; word-wrap: break-word;;">
+                         {format_message(text)} \n </div></div>
                 """,
             unsafe_allow_html=True,
         )
     else:
-        avatar_url = "https://avataaars.io/?accessoriesType=Blank&avatarStyle=Transparent&clotheColor=Blue02&clotheType=ShirtScoopNeck&eyeType=Close&eyebrowType=Angry&facialHairColor=Auburn&facialHairType=BeardLight&graphicType=Hola&hairColor=PastelPink&hatColor=White&mouthType=ScreamOpen&skinColor=Pale&topType=LongHairDreads"
+        avatar_url = "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMzN1NHd1dHE1OGYzaHUyYnRueTU3cDltcjA0N2NnOWp3YWE4M3c1YSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hGAgSihWjKxma8Hyim/giphy.gif"
         message_alignment = "flex-start"
         message_bg_color = "#71797E"
         avatar_class = "bot-avatar"
@@ -404,7 +418,7 @@ async def run_response():
 
 def placeholder_write_html(placeholder, full_response):    
     avatar_setup = {
-        "url": "https://avataaars.io/?accessoriesType=Blank&avatarStyle=Transparent&clotheColor=Blue02&clotheType=ShirtScoopNeck&eyeType=Close&eyebrowType=Angry&facialHairColor=Auburn&facialHairType=BeardLight&graphicType=Hola&hairColor=PastelPink&hatColor=White&mouthType=ScreamOpen&skinColor=Pale&topType=LongHairDreads",
+        "url": "https://media1.giphy.com/media/v1.Y2lkPTc5MGI3NjExMzN1NHd1dHE1OGYzaHUyYnRueTU3cDltcjA0N2NnOWp3YWE4M3c1YSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/hGAgSihWjKxma8Hyim/giphy.gif",
         "alignment": "flex-start",
         "class": "bot-avatar"
     }
