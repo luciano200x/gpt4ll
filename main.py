@@ -1,9 +1,10 @@
-import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, html, re, uuid, yaml, asyncio, dotenv, os
+import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, html, re, uuid, yaml, asyncio, dotenv, os, base64
 from datetime import datetime
 from yaml.loader import SafeLoader
 from openai import AsyncOpenAI
 from search_web import get_page_text, get_driver
 from urlextract import URLExtract
+from PIL import Image
 
 dotenv.load_dotenv()
 
@@ -33,9 +34,9 @@ with open('creds.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
 
 #Get user input
-def get_user_input() -> bool:
+def get_user_input(base64_image) -> bool:
     '''get user input'''
-    if prompt := st.chat_input(placeholder="query here"):        
+    if prompt := st.chat_input(placeholder="query here or place url for summarization"):        
         extractor = URLExtract()
         urls = extractor.find_urls(prompt)
         if urls:
@@ -47,6 +48,13 @@ def get_user_input() -> bool:
                         st.stop()
                     else:
                         prompt = SUMMARY_PROMPT + text.strip().replace('\n','')
+        elif base64_image:
+            image_content = []
+            image_content.append({"type": "text","text": f"{prompt}"})
+            image_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
+            # https://platform.openai.com/docs/guides/vision 
+            prompt = image_content
+                                   
         append_message(prompt, role='user')
         st.session_state["chat_react"] = True
         return True
@@ -234,6 +242,38 @@ def display_subject(text: str) -> str:
         return f"**{text}**"
     
 
+def format_dict(input_dict: dict) -> dict:
+    """
+    Used to format the dict in such a manner that it can be processed in SQL
+    """
+    # Check if the input dict has the 'content' key and whether 'content' is a list, indicating the first version structure
+    if 'content' in input_dict and isinstance(input_dict['content'], list):
+        text_content = None
+        for item in input_dict['content']:
+            # Look for a dict with a key 'type' and value 'text'
+            if item.get('type') == 'text':
+                # Assumes there's only one 'text' instance or takes the first one
+                text_array = item.get('text', [])
+                if text_array:
+                    text_content = text_array
+                    break
+        if text_content is None:  # In case no text content was found
+            raise ValueError("No text content found in input dictionary.")
+        # Format the new dict using the extracted text content
+        formatted_dict = {
+            'role': input_dict.get('role'),
+            'content': text_content,
+            'chatID': input_dict.get('chatID'),
+            'date': input_dict.get('date'),
+            'messageID': input_dict.get('messageID')
+        }
+    else:
+        # If the input dict does not have the 'content' key as a list, it's assumed to be in the correct format already
+        formatted_dict = input_dict
+
+    return formatted_dict
+
+
 def append_message(content: str, role: str ="assistant") -> None:
     chatID = st.session_state["chatID"]
     date = st.session_state["date"]
@@ -241,6 +281,7 @@ def append_message(content: str, role: str ="assistant") -> None:
     messageID = generate_random_identifier()
     message = {"role": role, "content": content, "chatID": chatID, "date": date.isoformat(), "messageID": messageID}
     st.session_state.messages.append(message)
+    message = format_dict(message) #remove image from dict so it can be processed to SQL
     save_or_delete_message_in_sql(message)
 
 
@@ -374,6 +415,7 @@ def reset() -> None:
     st.session_state["date"] = datetime.now().date()
     st.session_state["instructionID"] = generate_random_identifier()
     st.session_state["instruction"] = False
+    st.session_state["fileupload"] = False
 
 
 def login() -> stauth.Authenticate:
@@ -401,9 +443,10 @@ async def run_response():
     if st.session_state.messages != INITIAL_MESSAGE and st.session_state.messages[-1]['role'] != 'system' and st.session_state["chat_react"]:
         placeholder = st.empty()
         full_response = ''
+        model = "gpt-4-vision-preview" if st.session_state["fileupload"] else "gpt-4-turbo-preview"        
         with st.spinner("Thinking"):
             if "OPENAI" in st.session_state["model"]:
-                async for item in get_OPENAI_streaming_response(st.session_state.messages, stream=True):
+                async for item in get_OPENAI_streaming_response(st.session_state.messages, model=model, stream=True):
                     if item:
                         full_response += item
                         placeholder_write_html(placeholder, full_response)
@@ -458,19 +501,31 @@ async def main():
     if "instructionID" not in st.session_state:
         st.session_state["instructionID"] = generate_random_identifier()
     if "instruction" not in st.session_state:
-        st.session_state["instruction"] = False           
+        st.session_state["instruction"] = False 
+    if "fileupload" not in st.session_state:
+        st.session_state["fileupload"] = False                   
     if "chat_react" not in st.session_state:
         st.session_state["chat_react"] = False   
 
     st.session_state["chat_react"] = False
 
-    usermsg = get_user_input()
+    base64_image = ''
+    if file_upload := st.sidebar.checkbox(label="File upload",value=st.session_state["fileupload"]):
+        st.session_state["fileupload"] = file_upload
+        st.session_state["model"] = "OPENAI"
+        file = st.file_uploader('Choose an image file (png/jpg)', ['png','jpg'])
+        if file is not None:
+            image = Image.open(file)
+            st.image(image, use_column_width=True)
+            base64_image = base64.b64encode(file.getvalue()).decode('utf-8')
+
+    usermsg = get_user_input(base64_image)
 
     if text_search := st.sidebar.text_input("Search history", value=""):
        search_history(text_search)
     else: display_chat_history_sidebar() # Load and display chat history 
 
-    if instruction_st := st.checkbox(label="Custom instruction",value=st.session_state["instruction"]):
+    if instruction_st := st.sidebar.checkbox(label="Custom instruction",value=st.session_state["instruction"]):
         st.session_state["instruction"] = instruction_st
         # Set a custom (system) instruction for the LLM.
         systemmsg = conn.query("SELECT content FROM messages WHERE chatID = :chatID and role = 'system' ORDER BY add_date DESC LIMIT 1;",params={"chatID":st.session_state["chatID"]},ttl=0.5)
