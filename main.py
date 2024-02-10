@@ -60,61 +60,39 @@ def get_user_input(base64_image) -> bool:
         return True
 
 
-async def get_streaming_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=False, _async: bool=False) -> list:
-    '''
-    Used to query LLM. A list object is returned.
-
-    Param: message (list): contains a message or conversation that can be fed to an LLM.
-    Param: model (g4f.models): When model is entered, this will be used.
-    '''
-    try:
-        if _async:
-            response = await g4f.ChatCompletion.create_async(
-                model=model,
-                messages=messages,
-                stream=stream
-            )
-        else:
-            response = g4f.ChatCompletion.create(
-                model=model,
-                messages=messages,
-                stream=stream
-            )
-    except Exception as e:
-        #fallback on different model in case of exception
-        if 'CaptchaChallenge' in str(e) and model != g4f.models.gpt_4_0613:
-            st.write('Using different model')
-            response = await get_streaming_response(messages=messages,model=g4f.models.gpt_4_0613,stream=stream,_async=_async)
-        else: return None
-    if response:
-        return response
-
-
-async def get_OPENAI_streaming_response(messages: list, model="gpt-4-turbo-preview", stream: bool=False) -> str:
+async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=True):
     '''
     Used to query LLM. A str object is returned.
 
     Param: message (list): contains a message or conversation that can be fed to an LLM.
     Param: model: When model is entered, this will be used.
     '''
-    # Remove unsupported keys
-    for message in messages:
-        message.pop("chatID", None)
-        message.pop("date", None)
-        message.pop("messageID", None)
-
-    try:
-        # Fetching streaming responses
-        async for chunk in await alt_client.chat.completions.create(
-            model=model,
-            messages=messages,
-            stream=stream
-        ):
-            content = chunk.choices[0].delta.content
-            if content and content is not None:
-                yield str(content)
+    try: 
+        if g4f.models.gpt_4_turbo != model:
+            # Remove unsupported keys
+            for message in messages:
+                for key in ["chatID", "date", "messageID"]:
+                    message.pop(key, None)
+            async for chunk in await alt_client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=stream
+            ):
+                content = chunk.choices[0].delta.content
+                if content and content is not None:
+                    yield str(content)                
+        else:
+            async for chunk in g4f.ChatCompletion.create_async(
+                model=model,
+                messages=messages,
+                stream=stream
+            ):
+                content = chunk
+                if content and content is not None:
+                    yield str(content)
     except Exception as e:
         st.write(f"An error occurred: {e}")
+        st.stop()
     
 
 def format_message(text: str) -> str:
@@ -219,14 +197,17 @@ async def get_subject_message(content: str) -> None:
     SUBJECT_QUERY[1]["content"] += content
     with st.sidebar:
         with st.spinner("Getting subject"):
-            subject = await get_streaming_response(messages=SUBJECT_QUERY,_async=True)
+            subject = ''
+            async for item in get_response(messages=SUBJECT_QUERY, model=g4f.models.gpt_4_turbo):
+                if item:
+                    subject += item
     st.session_state["subject"] = subject
     with conn.session as s:
         sql = """
             INSERT INTO subject(chatID,subject)
             SELECT :chatID, :subject WHERE NOT EXISTS (SELECT * FROM subject WHERE chatID = :chatID);
             """
-        s.execute(sql, {'chatID': st.session_state["chatID"], 'subject': subject})
+        s.execute(sql, {'chatID': st.session_state["chatID"], 'subject': subject.strip().replace('\n','')})
         s.commit()
 
 
@@ -234,6 +215,8 @@ def display_subject(text: str) -> str:
     '''
     This function takes a text string as input and returns only the text between two asterisks, including the asterisks, as output. If there is no text between asterisks, it returns an empty string. It uses regular expressions to find the text pattern.
     '''
+    # Remove code blocks (identified by triple backticks)
+    text = re.sub(r"```[^`]*```", "", text)
     pattern = r"\*\*[^\*]+\*\*"
     match = re.search(pattern, text)
     if match:
@@ -443,19 +426,12 @@ async def run_response():
     if st.session_state.messages != INITIAL_MESSAGE and st.session_state.messages[-1]['role'] != 'system' and st.session_state["chat_react"]:
         placeholder = st.empty()
         full_response = ''
-        model = "gpt-4-vision-preview" if st.session_state["fileupload"] else "gpt-4-turbo-preview"        
+        model = "gpt-4-vision-preview" if st.session_state["fileupload"] else ("gpt-4-turbo-preview" if "OPENAI" in st.session_state["model"] else g4f.models.gpt_4_turbo)
         with st.spinner("Thinking"):
-            if "OPENAI" in st.session_state["model"]:
-                async for item in get_OPENAI_streaming_response(st.session_state.messages, model=model, stream=True):
-                    if item:
-                        full_response += item
-                        placeholder_write_html(placeholder, full_response)
-            else:
-                response_items = await get_streaming_response(st.session_state.messages, stream=True)
-                for item in response_items:
+            async for item in get_response(st.session_state.messages,model=model):
+                if item:
                     full_response += item
                     placeholder_write_html(placeholder, full_response)
-
             append_message(full_response)
 
 
@@ -552,7 +528,13 @@ async def main():
 
     if usermsg:
         usermessage = conn.query("SELECT content FROM messages WHERE chatID = :chatID AND role = 'user' ORDER BY add_date LIMIT 1;",params={"chatID":st.session_state["chatID"]},ttl=0.5)
-        await asyncio.gather(run_response(), get_subject_message(usermessage.iloc[0][0]))
+        try:
+            await asyncio.gather(run_response(), get_subject_message(usermessage.iloc[0][0]))
+        except Exception as e:
+            #expand exception in future
+            if 'CaptchaChallenge' in str(e):
+                st.write(str(e))
+                st.stop()
         st.rerun()
 
     # Used to delete current session.
