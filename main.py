@@ -1,4 +1,5 @@
 import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, html, re, uuid, yaml, asyncio, dotenv, os, base64
+from gpt4free.g4f.Provider.Bing import Bing, Tones
 from datetime import datetime
 from yaml.loader import SafeLoader
 from openai import AsyncOpenAI
@@ -24,7 +25,6 @@ SUBJECT_QUERY = [
 ]
 SUMMARY_PROMPT = 'Write a summary of the following text: '
 
-
 with open("ui/styles.md", "r") as styles_file:
     styles_content = styles_file.read()
 
@@ -39,7 +39,7 @@ def get_user_input(base64_image) -> bool:
     if prompt := st.chat_input(placeholder="query here or place url for summarization"):        
         extractor = URLExtract()
         urls = extractor.find_urls(prompt)
-        if urls:
+        if urls and st.session_state["summarize"]:
             for url in urls:
                 with get_driver() as driver:
                     text = get_page_text(url, driver)
@@ -60,39 +60,52 @@ def get_user_input(base64_image) -> bool:
         return True
 
 
-async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=True):
+async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=True, image_file=None):
     '''
     Used to query LLM. A str object is returned.
 
     Param: message (list): contains a message or conversation that can be fed to an LLM.
     Param: model: When model is entered, this will be used.
     '''
-    try: 
-        if g4f.models.gpt_4_turbo != model:
-            # Remove unsupported keys
-            for message in messages:
-                for key in ["chatID", "date", "messageID"]:
-                    message.pop(key, None)
-            async for chunk in await alt_client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=stream
-            ):
-                content = chunk.choices[0].delta.content
-                if content and content is not None:
-                    yield str(content)                
-        else:
-            async for chunk in g4f.ChatCompletion.create_async(
-                model=model,
-                messages=messages,
-                stream=stream
-            ):
-                content = chunk
-                if content and content is not None:
-                    yield str(content)
-    except Exception as e:
-        st.write(f"An error occurred: {e}")
-        st.stop()
+    if g4f.models.gpt_4_turbo != model:
+        # Remove unsupported keys
+        for message in messages:
+            for key in ["chatID", "date", "messageID"]:
+                message.pop(key, None)
+        async for chunk in await alt_client.chat.completions.create(
+            model=model,
+            messages=messages,
+            stream=stream
+        ):
+            content = chunk.choices[0].delta.content
+            if content and content is not None:
+                yield str(content)      
+
+    elif st.session_state["web_search"] or st.session_state["fileupload"]:
+        # Remove unsupported keys
+        for message in messages:
+            for key in ["chatID", "date", "messageID"]:
+                message.pop(key, None)        
+        async for chunk in Bing.create_async_generator(
+            model="gpt-4-turbo-preview",
+            messages=messages,
+            web_search=True,
+            image=image_file,
+            tone=Tones.precise  # You can choose any tone as per your preference
+        ):
+            content = chunk
+            if content and content is not None:
+                yield str(content)
+
+    else:
+        async for chunk in g4f.ChatCompletion.create_async(
+            model=model,
+            messages=messages,
+            stream=stream
+        ):
+            content = chunk
+            if content and content is not None:
+                yield str(content)
     
 
 def format_message(text: str) -> str:
@@ -399,6 +412,8 @@ def reset() -> None:
     st.session_state["instructionID"] = generate_random_identifier()
     st.session_state["instruction"] = False
     st.session_state["fileupload"] = False
+    st.session_state["web_search"] = False
+    st.session_state["summarize"] = False
 
 
 def login() -> stauth.Authenticate:
@@ -422,13 +437,13 @@ def login() -> stauth.Authenticate:
         st.stop()
 
 
-async def run_response():
+async def run_response(image_file):
     if st.session_state.messages != INITIAL_MESSAGE and st.session_state.messages[-1]['role'] != 'system' and st.session_state["chat_react"]:
         placeholder = st.empty()
         full_response = ''
         model = "gpt-4-vision-preview" if st.session_state["fileupload"] else ("gpt-4-turbo-preview" if "OPENAI" in st.session_state["model"] else g4f.models.gpt_4_turbo)
         with st.spinner("Thinking"):
-            async for item in get_response(st.session_state.messages,model=model):
+            async for item in get_response(st.session_state.messages,model=model,image_file=image_file):
                 if item:
                     full_response += item
                     placeholder_write_html(placeholder, full_response)
@@ -481,19 +496,32 @@ async def main():
     if "fileupload" not in st.session_state:
         st.session_state["fileupload"] = False                   
     if "chat_react" not in st.session_state:
-        st.session_state["chat_react"] = False   
+        st.session_state["chat_react"] = False
+    if "web_search" not in st.session_state:
+        st.session_state["web_search"] = False
+    if "summarize" not in st.session_state:
+        st.session_state["summarize"] = False
 
     st.session_state["chat_react"] = False
 
     base64_image = ''
+    image_file = None
     if file_upload := st.sidebar.checkbox(label="File upload",value=st.session_state["fileupload"]):
         st.session_state["fileupload"] = file_upload
-        st.session_state["model"] = "OPENAI"
+        # st.session_state["model"] = "OPENAI"
         file = st.file_uploader('Choose an image file (png/jpg)', ['png','jpg'])
         if file is not None:
-            image = Image.open(file)
-            st.image(image, use_column_width=True)
-            base64_image = base64.b64encode(file.getvalue()).decode('utf-8')
+            with Image.open(file,'r') as image:
+                st.image(image, use_column_width=True)
+                image_file = image
+                base64_image = base64.b64encode(file.getvalue()).decode('utf-8')
+
+    if web_search := st.sidebar.checkbox(label="Web search",value=st.session_state["web_search"]):
+        st.session_state["web_search"] = web_search
+        st.caption("Web search active")
+
+    if summarize := st.sidebar.checkbox(label="Summarize", value=st.session_state["summarize"]):
+        st.session_state["summarize"] = summarize
 
     usermsg = get_user_input(base64_image)
 
@@ -529,7 +557,7 @@ async def main():
     if usermsg:
         usermessage = conn.query("SELECT content FROM messages WHERE chatID = :chatID AND role = 'user' ORDER BY add_date LIMIT 1;",params={"chatID":st.session_state["chatID"]},ttl=0.5)
         try:
-            await asyncio.gather(run_response(), get_subject_message(usermessage.iloc[0][0]))
+            await asyncio.gather(run_response(image_file), get_subject_message(usermessage.iloc[0][0]))
         except Exception as e:
             #expand exception in future
             if 'CaptchaChallenge' in str(e):
