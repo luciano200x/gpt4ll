@@ -441,7 +441,12 @@ async def run_response(image_file):
     if st.session_state.messages != INITIAL_MESSAGE and st.session_state.messages[-1]['role'] != 'system' and st.session_state["chat_react"]:
         placeholder = st.empty()
         full_response = ''
-        model = "gpt-4-vision-preview" if st.session_state["fileupload"] else ("gpt-4-turbo-preview" if "OPENAI" in st.session_state["model"] else g4f.models.gpt_4_turbo)
+        if "OPENAI" in st.session_state["model"] and st.session_state["fileupload"]:
+            model = "gpt-4-vision-preview"
+        elif "OPENAI" in st.session_state["model"]:
+            model = "gpt-4-turbo-preview"
+        else:
+            model = g4f.models.gpt_4_turbo
         with st.spinner("Thinking"):
             async for item in get_response(st.session_state.messages,model=model,image_file=image_file):
                 if item:
