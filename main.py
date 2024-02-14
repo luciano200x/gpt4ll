@@ -1,11 +1,8 @@
-import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, html, re, uuid, yaml, asyncio, dotenv, os, base64
-from gpt4free.g4f.Provider.Bing import Bing, Tones
+import gpt4free.g4f as g4f, streamlit as st, streamlit_authenticator as stauth, html, re, uuid, yaml, asyncio, dotenv, os
 from datetime import datetime
 from yaml.loader import SafeLoader
 from openai import AsyncOpenAI
-from search_web import get_page_text, get_driver
-from urlextract import URLExtract
-from PIL import Image
+
 
 dotenv.load_dotenv()
 
@@ -14,7 +11,7 @@ dotenv.load_dotenv()
 
 alt_client = AsyncOpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
-st.set_page_config(page_title="GPT4LL", page_icon="️‍‍☠️", layout="centered", initial_sidebar_state="collapsed", menu_items=None)
+st.set_page_config(page_title="GPT4LL", layout="centered", initial_sidebar_state="collapsed", menu_items=None)
 
 conn = st.connection("app_db", type="sql")
 
@@ -23,7 +20,6 @@ SUBJECT_QUERY = [
     {"role": "system", "content": "always respond by summarizing the user query using exactly four words only"},
     {"role": "user", "content": "summarize the following query in four words so it can be used as a subject header. Do not use more than four words: "},
 ]
-SUMMARY_PROMPT = 'Write a summary of the following text: '
 
 with open("ui/styles.md", "r") as styles_file:
     styles_content = styles_file.read()
@@ -34,33 +30,15 @@ with open('creds.yaml') as file:
     config = yaml.load(file, Loader=SafeLoader)
 
 #Get user input
-def get_user_input(base64_image) -> bool:
+def get_user_input() -> bool:
     '''get user input'''
-    if prompt := st.chat_input(placeholder="query here or place url for summarization"):        
-        extractor = URLExtract()
-        urls = extractor.find_urls(prompt)
-        if urls and st.session_state["summarize"]:
-            for url in urls:
-                with get_driver() as driver:
-                    text = get_page_text(url, driver)
-                    if len(text) > 20000:
-                        st.write('Web text is longer than 20000 characters. Please cut into smaller pieces.')
-                        st.stop()
-                    else:
-                        prompt = SUMMARY_PROMPT + text.strip().replace('\n','')
-        elif base64_image:
-            image_content = []
-            image_content.append({"type": "text","text": f"{prompt}"})
-            image_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}})
-            # https://platform.openai.com/docs/guides/vision 
-            prompt = image_content
-                                   
+    if prompt := st.chat_input(placeholder="query here"):        
         append_message(prompt, role='user')
         st.session_state["chat_react"] = True
         return True
 
 
-async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=True, image_file=None):
+async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo, stream: bool=True):
     '''
     Used to query LLM. A str object is returned.
 
@@ -80,22 +58,6 @@ async def get_response(messages: list, model: g4f.models=g4f.models.gpt_4_turbo,
             content = chunk.choices[0].delta.content
             if content and content is not None:
                 yield str(content)      
-
-    elif st.session_state["web_search"] or st.session_state["fileupload"]:
-        # Remove unsupported keys
-        for message in messages:
-            for key in ["chatID", "date", "messageID"]:
-                message.pop(key, None)        
-        async for chunk in Bing.create_async_generator(
-            model="gpt-4-turbo-preview",
-            messages=messages,
-            web_search=True,
-            image=image_file,
-            tone=Tones.precise  # You can choose any tone as per your preference
-        ):
-            content = chunk
-            if content and content is not None:
-                yield str(content)
 
     else:
         async for chunk in g4f.ChatCompletion.create_async(
@@ -236,38 +198,6 @@ def display_subject(text: str) -> str:
         return match.group()
     else:
         return f"**{text}**"
-    
-
-def format_dict(input_dict: dict) -> dict:
-    """
-    Used to format the dict in such a manner that it can be processed in SQL
-    """
-    # Check if the input dict has the 'content' key and whether 'content' is a list, indicating the first version structure
-    if 'content' in input_dict and isinstance(input_dict['content'], list):
-        text_content = None
-        for item in input_dict['content']:
-            # Look for a dict with a key 'type' and value 'text'
-            if item.get('type') == 'text':
-                # Assumes there's only one 'text' instance or takes the first one
-                text_array = item.get('text', [])
-                if text_array:
-                    text_content = text_array
-                    break
-        if text_content is None:  # In case no text content was found
-            raise ValueError("No text content found in input dictionary.")
-        # Format the new dict using the extracted text content
-        formatted_dict = {
-            'role': input_dict.get('role'),
-            'content': text_content,
-            'chatID': input_dict.get('chatID'),
-            'date': input_dict.get('date'),
-            'messageID': input_dict.get('messageID')
-        }
-    else:
-        # If the input dict does not have the 'content' key as a list, it's assumed to be in the correct format already
-        formatted_dict = input_dict
-
-    return formatted_dict
 
 
 def append_message(content: str, role: str ="assistant") -> None:
@@ -277,7 +207,6 @@ def append_message(content: str, role: str ="assistant") -> None:
     messageID = generate_random_identifier()
     message = {"role": role, "content": content, "chatID": chatID, "date": date.isoformat(), "messageID": messageID}
     st.session_state.messages.append(message)
-    message = format_dict(message) #remove image from dict so it can be processed to SQL
     save_or_delete_message_in_sql(message)
 
 
@@ -411,9 +340,6 @@ def reset() -> None:
     st.session_state["date"] = datetime.now().date()
     st.session_state["instructionID"] = generate_random_identifier()
     st.session_state["instruction"] = False
-    st.session_state["fileupload"] = False
-    st.session_state["web_search"] = False
-    st.session_state["summarize"] = False
 
 
 def login() -> stauth.Authenticate:
@@ -437,18 +363,13 @@ def login() -> stauth.Authenticate:
         st.stop()
 
 
-async def run_response(image_file):
+async def run_response():
     if st.session_state.messages != INITIAL_MESSAGE and st.session_state.messages[-1]['role'] != 'system' and st.session_state["chat_react"]:
         placeholder = st.empty()
         full_response = ''
-        if "OPENAI" in st.session_state["model"] and st.session_state["fileupload"]:
-            model = "gpt-4-vision-preview"
-        elif "OPENAI" in st.session_state["model"]:
-            model = "gpt-4-turbo-preview"
-        else:
-            model = g4f.models.gpt_4_turbo
+        model = "gpt-4-turbo-preview" if "OPENAI" in st.session_state["model"] else g4f.models.gpt_4_turbo
         with st.spinner("Thinking"):
-            async for item in get_response(st.session_state.messages,model=model,image_file=image_file):
+            async for item in get_response(st.session_state.messages,model=model):
                 if item:
                     full_response += item
                     placeholder_write_html(placeholder, full_response)
@@ -497,38 +418,13 @@ async def main():
     if "instructionID" not in st.session_state:
         st.session_state["instructionID"] = generate_random_identifier()
     if "instruction" not in st.session_state:
-        st.session_state["instruction"] = False 
-    if "fileupload" not in st.session_state:
-        st.session_state["fileupload"] = False                   
+        st.session_state["instruction"] = False                  
     if "chat_react" not in st.session_state:
         st.session_state["chat_react"] = False
-    if "web_search" not in st.session_state:
-        st.session_state["web_search"] = False
-    if "summarize" not in st.session_state:
-        st.session_state["summarize"] = False
 
     st.session_state["chat_react"] = False
 
-    base64_image = ''
-    image_file = None
-    if file_upload := st.sidebar.checkbox(label="File upload",value=st.session_state["fileupload"]):
-        st.session_state["fileupload"] = file_upload
-        # st.session_state["model"] = "OPENAI"
-        file = st.file_uploader('Choose an image file (png/jpg)', ['png','jpg'])
-        if file is not None:
-            with Image.open(file,'r') as image:
-                st.image(image, use_column_width=True)
-                image_file = image
-                base64_image = base64.b64encode(file.getvalue()).decode('utf-8')
-
-    if web_search := st.sidebar.checkbox(label="Web search",value=st.session_state["web_search"]):
-        st.session_state["web_search"] = web_search
-        st.caption("Web search active")
-
-    if summarize := st.sidebar.checkbox(label="Summarize", value=st.session_state["summarize"]):
-        st.session_state["summarize"] = summarize
-
-    usermsg = get_user_input(base64_image)
+    usermsg = get_user_input()
 
     if text_search := st.sidebar.text_input("Search history", value=""):
        search_history(text_search)
@@ -562,7 +458,7 @@ async def main():
     if usermsg:
         usermessage = conn.query("SELECT content FROM messages WHERE chatID = :chatID AND role = 'user' ORDER BY add_date LIMIT 1;",params={"chatID":st.session_state["chatID"]},ttl=0.5)
         try:
-            await asyncio.gather(run_response(image_file), get_subject_message(usermessage.iloc[0][0]))
+            await asyncio.gather(run_response(), get_subject_message(usermessage.iloc[0][0]))
         except Exception as e:
             #expand exception in future
             if 'CaptchaChallenge' in str(e):
