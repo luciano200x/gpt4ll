@@ -1,5 +1,5 @@
 # test_main.py
-from main import generate_random_identifier, format_message, display_subject, parse_date
+from project import generate_random_identifier, format_message, display_subject, parse_date
 import uuid, datetime
 
 def test_generate_random_identifier():
