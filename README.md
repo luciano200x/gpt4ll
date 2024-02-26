@@ -1,7 +1,7 @@
 # GPT4LL
 #### Video demo: https://youtu.be/JZoX-K1C7mo
+The video shows the Lite version of the app (with the core functionality). The full version is in the main branch of this project.
 #### Description: 
-
   * Personal chatbot: The main function of the project
   * Chat storage: I store all the chats in a database. You can access them anytime by extending the menu. Each chat has a summarize subject title that gives you a brief overview of what was talked about.
   * Chat editing: You can edit any chat that you had by clicking on the Edit button. You can change the content of the chat. You can also add or delete messages from the chat.
@@ -13,7 +13,9 @@
   * Chat search: Chat history can be searched, effectively querying the underlying messages in the database and returning only the corresponding subject headers, which makes it very efficient.
   * Parallel processing: To support this, I had to implement asynchronous processing, meaning you can run several processes at once. This saves times, since I can have the LLM finish a reaction and generate a subject at the same time.
   * Streaming text: The models that support this had streaming text enabled. This in combination with parallel processing was difficult to get to work properly.
-  * Features I turned off because I didn't use them (I put code for this in another branch of this project, check it out):
-   - I also added the possibility to upload images. To do this I had to implement a new route in the processing to the LLM's.
-   - Web search. It was possible to query a web search using the Bing connector.
-   - Summarize text. Possible to summarize the text that was entered in the chat.
+  * Features I that are excluded from the Lite branch (I put code for this in another branch of this project, check it out):
+    - I added the possibility to upload images. To do this I had to implement a new route in the processing to the LLM's. Images are, at the time of writing, only processed by OPENAI's GPT4-Vision-Preview model.
+    - Web search. It is possible to perform a web search using the Bing connector. 
+    - Summarize text. Possible to summarize the text on a webpage based on putting only the url in the chat. For this functionality to work, I had to implement web-browsing based on the Selenium library.
+
+
