@@ -171,9 +171,10 @@ async def get_subject_message(content: str) -> None:
     '''   
     SUBJECT_QUERY[1]["content"] += content
     with st.sidebar:
+        model = "gpt-4-turbo-preview" if "OPENAI" in st.session_state["model"] else g4f.models.gpt_4_turbo
         with st.spinner("Getting subject"):
             subject = ''
-            async for item in get_response(messages=SUBJECT_QUERY, model=g4f.models.gpt_4_turbo):
+            async for item in get_response(messages=SUBJECT_QUERY,model=model):
                 if item:
                     subject += item
     st.session_state["subject"] = subject
