@@ -284,10 +284,11 @@ def display_chat_history_sidebar(input = None) -> None:
     # Create a dictionary to hold messages grouped by date
     grouped_by_date = {}
     sql = """
-            SELECT DISTINCT s.subject,m.date,s.chatID
+            SELECT DISTINCT s.subject,MAX(m.date) as date,s.chatID
             FROM subject s 
             JOIN messages m ON s.chatID = m.chatID
             WHERE s.subject IS NOT NULL
+            GROUP BY s.subject, s.chatID
             ORDER BY m.add_date DESC
             LIMIT 25;
             """
